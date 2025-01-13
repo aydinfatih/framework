@@ -273,6 +273,12 @@ class RoutingUrlGeneratorTest extends TestCase
         }]);
         $routes->add($route);
 
+        /*
+         * With backed enum name and domain
+         */
+        $route = (new Route(['GET'], 'backed-enum', ['as' => 'prefixed.']))->name(RouteNameEnum::UserIndex)->domain(RouteDomainEnum::DashboardDomain);
+        $routes->add($route);
+
         $this->assertSame('/', $url->route('plain', [], false));
         $this->assertSame('/?foo=bar', $url->route('plain', ['foo' => 'bar'], false));
         $this->assertSame('http://www.foo.com/foo/bar', $url->route('foo'));
@@ -305,6 +311,7 @@ class RoutingUrlGeneratorTest extends TestCase
         $this->assertSame('/foo/bar?foo=bar#derp', $url->route('fragment', ['foo' => 'bar'], false));
         $this->assertSame('/foo/bar?baz=%C3%A5%CE%B1%D1%84#derp', $url->route('fragment', ['baz' => 'åαф'], false));
         $this->assertSame('http://en.example.com/foo', $url->route('defaults'));
+        $this->assertSame('http://dashboard.myapp.com/backed-enum', $url->route('prefixed.users.index'));
     }
 
     public function testFluentRouteNameDefinitions()
@@ -709,6 +716,20 @@ class RoutingUrlGeneratorTest extends TestCase
         $this->assertSame('https://www.bar.com/foo', $url->route('plain'));
     }
 
+    public function testForceHttps()
+    {
+        $url = new UrlGenerator(
+            $routes = new RouteCollection,
+            Request::create('http://www.foo.com/')
+        );
+
+        $url->forceHttps();
+        $route = new Route(['GET'], '/foo', ['as' => 'plain']);
+        $routes->add($route);
+
+        $this->assertSame('https://www.foo.com/foo', $url->route('plain'));
+    }
+
     public function testPrevious()
     {
         $url = new UrlGenerator(
@@ -887,6 +908,22 @@ class RoutingUrlGeneratorTest extends TestCase
         $this->assertSame('http://www.foo.com/foo/fruits', $url->route('foo.bar', CategoryBackedEnum::Fruits));
     }
 
+    public function testRouteGenerationWithNestedBackedEnums()
+    {
+        $url = new UrlGenerator(
+            $routes = new RouteCollection,
+            Request::create('http://www.foo.com/')
+        );
+
+        $namedRoute = new Route(['GET'], '/foo', ['as' => 'foo']);
+        $routes->add($namedRoute);
+
+        $this->assertSame(
+            'http://www.foo.com/foo?filter%5B0%5D=people&filter%5B1%5D=fruits',
+            $url->route('foo', ['filter' => [CategoryBackedEnum::People, CategoryBackedEnum::Fruits]]),
+        );
+    }
+
     public function testSignedUrlWithKeyResolver()
     {
         $url = new UrlGenerator(
@@ -894,7 +931,7 @@ class RoutingUrlGeneratorTest extends TestCase
             $request = Request::create('http://www.foo.com/')
         );
         $url->setKeyResolver(function () {
-            return 'secret';
+            return 'first-secret';
         });
 
         $route = new Route(['GET'], 'foo', ['as' => 'foo', function () {
@@ -902,24 +939,32 @@ class RoutingUrlGeneratorTest extends TestCase
         }]);
         $routes->add($route);
 
-        $request = Request::create($url->signedRoute('foo'));
+        $firstRequest = Request::create($url->signedRoute('foo'));
 
-        $this->assertTrue($url->hasValidSignature($request));
+        $this->assertTrue($url->hasValidSignature($firstRequest));
 
         $request = Request::create($url->signedRoute('foo').'?tampered=true');
 
         $this->assertFalse($url->hasValidSignature($request));
 
         $url2 = $url->withKeyResolver(function () {
-            return 'other-secret';
+            return 'second-secret';
         });
 
-        $this->assertFalse($url2->hasValidSignature($request));
+        $this->assertFalse($url2->hasValidSignature($firstRequest));
 
-        $request = Request::create($url2->signedRoute('foo'));
+        $secondRequest = Request::create($url2->signedRoute('foo'));
 
-        $this->assertTrue($url2->hasValidSignature($request));
-        $this->assertFalse($url->hasValidSignature($request));
+        $this->assertTrue($url2->hasValidSignature($secondRequest));
+        $this->assertFalse($url->hasValidSignature($secondRequest));
+
+        // Key resolver also supports multiple keys, for app key rotation via the config "app.previous_keys"
+        $url3 = $url->withKeyResolver(function () {
+            return ['first-secret', 'second-secret'];
+        });
+
+        $this->assertTrue($url3->hasValidSignature($firstRequest));
+        $this->assertTrue($url3->hasValidSignature($secondRequest));
     }
 
     public function testMissingNamedRouteResolution()
